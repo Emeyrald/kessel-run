@@ -1,4 +1,5 @@
-from enum import Enum, auto, unique
+from enum import Enum, unique
+from collections import deque
 
 @unique
 class Direction(Enum):
@@ -39,6 +40,28 @@ class Maze:
         if not self._in_bounds(nr, nc):
             return None
         return nr, nc
+
+    def distances_from(self, start):
+        """Dictonary mapping each reachable cell to its step distance from the start"""
+        queue = deque([start])
+        distances = {start: 0}
+
+        while queue:
+            cell = queue.popleft()
+            row, col = cell
+            for d in Direction:
+                neighbor = self.neighbor(row, col, d)
+                if neighbor is None:
+                    continue
+                if not self.is_open(row, col, d):
+                    continue
+                if neighbor in distances:
+                    continue
+                distances[neighbor] = distances[cell] + 1
+                queue.append(neighbor)
+
+        return distances
+
 
     def _wall_index(self, row, col, direction):
         if not self._in_bounds(row, col):
