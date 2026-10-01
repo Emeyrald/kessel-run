@@ -1,3 +1,4 @@
+import random
 from kessel_run.maze import Maze, Direction
 
 def generate(maze, rng):
@@ -31,3 +32,27 @@ def generate(maze, rng):
         else:
             stack.pop()
 
+def build_maze(rows, cols, seed, loop_fraction):
+    """Order for RNG: Generate maze, get start_cell, get exit_cell, add loops. The same inputs give the same maze."""
+    rng = random.Random(seed)
+    maze = Maze(rows, cols)
+    generate(maze, rng)
+
+    border_cells = maze.border_cells()
+
+    maze.start_cell = rng.choice(border_cells)
+    distances = maze.distances_from(maze.start_cell)
+    maze.exit_cell = max((cell for cell in border_cells), key=distances.get)
+
+    er, ec = maze.exit_cell
+    maze.exit_wall = next(d for d in Direction if maze.neighbor(er, ec, d) is None)
+    maze.open_wall(er, ec, maze.exit_wall)
+
+    walls = maze.closed_interior_walls()
+    rng.shuffle(walls)
+
+    limit = round(loop_fraction * len(walls))
+    for row, col, direction in walls[:limit]:
+        maze.open_wall(row, col, direction)
+
+    return maze
