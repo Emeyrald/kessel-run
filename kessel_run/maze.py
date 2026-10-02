@@ -94,6 +94,20 @@ class Maze:
                     walls.append((row, col, Direction.EAST))
 
         return walls
+
+    def open_interior_walls(self):
+        walls = []
+        for row in range(self.rows):
+            for col in range(self.cols):
+                south_neighbor = self.neighbor(row, col, Direction.SOUTH)
+                if south_neighbor is not None and self.is_open(row, col, Direction.SOUTH):
+                    walls.append((row, col, Direction.SOUTH))
+
+                east_neighbor = self.neighbor(row, col, Direction.EAST)
+                if east_neighbor is not None and self.is_open(row, col, Direction.EAST):
+                    walls.append((row, col, Direction.EAST))
+
+        return walls
         
     def _wall_index(self, row, col, direction):
         if not self._in_bounds(row, col):
