@@ -1,5 +1,9 @@
 import pygame
 from kessel_run.maze import Direction
+from kessel_run.robot import WallState
+
+WHITE = (255, 255, 255)
+GRAY_DIM = (60, 60, 60) 
 
 def draw_grid_line(surface, row, col, dx, dy, cell_size, offset_x, offset_y, color):
     width = max(1, cell_size // 10)
@@ -31,7 +35,7 @@ def draw_maze(surface, maze, cell_size, offset_x, offset_y):
         for row_idx, row in enumerate(array):
             for col_idx, value in enumerate(row):
                 if not value:
-                    draw_grid_line(surface, row_idx, col_idx, dx, dy, cell_size, offset_x, offset_y, (255, 255, 255))
+                    draw_grid_line(surface, row_idx, col_idx, dx, dy, cell_size, offset_x, offset_y, WHITE)
 
 def draw_cell(surface, cell, color, cell_size, offset_x, offset_y, inset):
     r, c = cell
@@ -40,4 +44,23 @@ def draw_cell(surface, cell, color, cell_size, offset_x, offset_y, inset):
     width = cell_size - 2 * inset
     height = cell_size - 2 * inset
     surface.fill(color, rect=(x, y, width, height))
-    
+
+def draw_robot(surface, cell, color, cell_size, offset_x, offset_y, radius_ratio=0.35):
+    row, col = cell
+
+    center_x = offset_x + (col * cell_size) + (cell_size // 2)
+    center_y = offset_y + (row * cell_size) + (cell_size // 2)
+
+    radius = int(cell_size * radius_ratio)
+
+    pygame.draw.circle(surface, color, (center_x, center_y), radius)
+
+def draw_belief_maze(surface, robot, cell_size, offset_x, offset_y):
+    belief_map = robot.belief_map
+    for array, (dx, dy) in [(belief_map.horizontal, (1, 0)), (belief_map.vertical, (0, 1))]:
+            for row_idx, row in enumerate(array):
+                for col_idx, state in enumerate(row):
+                    if state == WallState.CLOSED:
+                        draw_grid_line(surface, row_idx, col_idx, dx, dy, cell_size, offset_x, offset_y, WHITE)
+                    elif state == WallState.UNKNOWN:
+                        draw_grid_line(surface, row_idx, col_idx, dx, dy, cell_size, offset_x, offset_y, GRAY_DIM)
