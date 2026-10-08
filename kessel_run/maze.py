@@ -12,27 +12,30 @@ class Direction(Enum):
     def opposite(self):
         return Direction((-self.value[0], -self.value[1]))
 
-class Maze:
-    def __init__(self, rows, cols):
+class WallGrid:
+    def __init__(self, fill, rows, cols):
         self.rows = rows
         self.cols = cols
-        self.horizontal = [[False] * cols for _ in range(rows + 1)]
-        self.vertical = [[False] * (cols + 1) for _ in range(rows)]
-        self.start_cell = None
-        self.exit_cell = None
-        self.exit_wall = None
+        self.horizontal = [[fill] * cols for _ in range(rows + 1)]
+        self.vertical = [[fill] * (cols + 1) for _ in range(rows)]
 
-    def is_open(self, row, col, direction):
-        arr, r, c = self._wall_index(row, col, direction)
-        return arr[r][c]
+    def _wall_index(self, row, col, direction):
+        if not self._in_bounds(row, col):
+            raise IndexError(f"{row, col} out of bounds")
+        match direction:
+            case Direction.NORTH:
+                return self.horizontal, row, col
+            case Direction.SOUTH:
+                return self.horizontal, row + 1, col
+            case Direction.WEST:
+                return self.vertical, row, col
+            case Direction.EAST:
+                return self.vertical, row, col + 1
+            case _:
+                raise ValueError(f"Invalid direction: {direction!r}")
 
-    def open_wall(self, row, col, direction):
-        arr, r, c = self._wall_index(row, col, direction)
-        arr[r][c] = True
-
-    def close_wall(self, row, col, direction):
-        arr, r, c = self._wall_index(row, col, direction)
-        arr[r][c] = False
+    def _in_bounds(self, row, col):
+        return 0 <= row < self.rows and 0 <= col < self.cols
 
     def neighbor(self, row, col, direction):
         if not self._in_bounds(row, col):
@@ -43,6 +46,30 @@ class Maze:
         if not self._in_bounds(nr, nc):
             return None
         return nr, nc
+
+    def get_wall(self, row, col, direction):
+        arr, r, c = self._wall_index(row, col, direction)
+        return arr[r][c]
+
+    def set_wall(self, row, col, direction, value):
+        arr, r, c = self._wall_index(row, col, direction)
+        arr[r][c] = value
+
+class Maze(WallGrid):
+    def __init__(self, rows, cols):
+        super().__init__(False, rows, cols)
+        self.start_cell = None
+        self.exit_cell = None
+        self.exit_wall = None
+
+    def is_open(self, row, col, direction):
+        return self.get_wall(row, col, direction)
+
+    def open_wall(self, row, col, direction):
+        self.set_wall(row, col, direction, True)
+
+    def close_wall(self, row, col, direction):
+        self.set_wall(row, col, direction, False)
 
     def distances_from(self, start):
         """Dictionary mapping each reachable cell to its step distance from the start"""
@@ -108,21 +135,3 @@ class Maze:
                     walls.append((row, col, Direction.EAST))
 
         return walls
-        
-    def _wall_index(self, row, col, direction):
-        if not self._in_bounds(row, col):
-            raise IndexError(f"{row, col} out of bounds")
-        match direction:
-            case Direction.NORTH:
-                return self.horizontal, row, col
-            case Direction.SOUTH:
-                return self.horizontal, row + 1, col
-            case Direction.WEST:
-                return self.vertical, row, col
-            case Direction.EAST:
-                return self.vertical, row, col + 1
-            case _:
-                raise ValueError(f"Invalid direction: {direction!r}")
-
-    def _in_bounds(self, row, col):
-        return 0 <= row < self.rows and 0 <= col < self.cols

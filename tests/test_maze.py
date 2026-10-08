@@ -4,6 +4,7 @@ import copy
 from kessel_run.maze import Maze, Direction
 from kessel_run.generation import generate, build_maze
 from kessel_run.shifting import shift_walls, make_shift_rng
+from kessel_run.robot import Robot, WallState
 
 ROWS = 3
 COLS = 3
@@ -473,3 +474,165 @@ def test_shift_walls_fully_open_maze_no_crash():
     assert changes == []
     assert maze.horizontal == old_horizontal
     assert maze.vertical == old_vertical
+
+@pytest.fixture
+def corridor_1x5():
+    """A hand-built 1x5 horizontal corridor where all internal walls are open."""
+    maze = Maze(rows=1, cols=5)
+    for col in range(4):
+        maze.open_wall(0, col, Direction.EAST)
+    return maze
+
+@pytest.fixture
+def grid_3x3_partial():
+    """A hand-built 3x3 grid with a few open walls."""
+    maze = Maze(rows=3, cols=3)
+    maze.open_wall(0, 0, Direction.SOUTH) # (0,0) -> (1,0)
+    maze.open_wall(1, 0, Direction.EAST)  # (1,0) -> (1,1)
+    maze.open_wall(1, 1, Direction.EAST)  # (1,1) -> (1,2)
+    maze.open_wall(1, 2, Direction.SOUTH) # (1,2) -> (2,2)
+    return maze
+
+def test_initial_belief():
+    """Initial belief: every wall is unknown."""
+    robot = Robot(rows=3, cols=3, start_cell=(0, 0), exit_cell=(2, 2), sensor_range=2)
+    
+    for r in range(3):
+        for c in range(3):
+            for d in Direction:
+                assert robot.belief_map.get_wall(r, c, d) == WallState.UNKNOWN
+
+def test_is_passable_rules():
+    """is_passable: true for unknown and open, false for closed."""
+    robot = Robot(rows=3, cols=3, start_cell=(0, 0), exit_cell=(2, 2), sensor_range=2)
+    
+    assert robot.belief_map.is_passable(0, 0, Direction.EAST) is True
+    
+    robot.belief_map.set_wall(0, 0, Direction.EAST, WallState.OPEN)
+    assert robot.belief_map.is_passable(0, 0, Direction.EAST) is True
+    
+    robot.belief_map.set_wall(0, 0, Direction.EAST, WallState.CLOSED)
+    assert robot.belief_map.is_passable(0, 0, Direction.EAST) is False
+
+def test_own_cell_observed(corridor_1x5):
+    """Own cell observed: after sensing, all four walls of the robot's cell match the true maze."""
+    maze = corridor_1x5
+    robot = Robot(rows=1, cols=5, start_cell=(0, 0), exit_cell=(0, 4), sensor_range=0)
+    
+    robot.sense(maze)
+    
+    assert robot.belief_map.get_wall(0, 0, Direction.NORTH) == WallState.CLOSED
+    assert robot.belief_map.get_wall(0, 0, Direction.SOUTH) == WallState.CLOSED
+    assert robot.belief_map.get_wall(0, 0, Direction.WEST) == WallState.CLOSED
+    assert robot.belief_map.get_wall(0, 0, Direction.EAST) == WallState.OPEN
+
+def test_closed_wall_occlusion():
+    """Closed wall right next to the robot: nothing beyond it is recorded in that direction."""
+    maze = Maze(rows=1, cols=3)
+    robot = Robot(rows=1, cols=3, start_cell=(0, 0), exit_cell=(0, 2), sensor_range=2)
+
+    robot.sense(maze)
+
+    assert robot.belief_map.get_wall(0, 0, Direction.EAST) == WallState.CLOSED
+
+    for d in Direction:
+        if d == Direction.WEST:
+            continue
+        assert robot.belief_map.get_wall(0, 1, d) == WallState.UNKNOWN
+
+def test_stops_at_farther_wall(corridor_1x5):
+    """Stops at a farther wall: in a corridor with a closed wall two cells away, cells past it stay unknown."""
+    maze = corridor_1x5
+    maze.close_wall(0, 1, Direction.EAST)
+
+    robot = Robot(rows=1, cols=5, start_cell=(0, 0), exit_cell=(0, 4), sensor_range=3)
+    robot.sense(maze)
+
+    assert robot.belief_map.get_wall(0, 0, Direction.EAST) == WallState.OPEN
+    assert robot.belief_map.get_wall(0, 1, Direction.EAST) == WallState.CLOSED
+
+    for col in range(2, 5):
+        for d in Direction:
+            if col == 2 and d == Direction.WEST:
+                continue
+            assert robot.belief_map.get_wall(0, col, d) == WallState.UNKNOWN
+
+def test_range_is_respected(corridor_1x5):
+    """Range is respected: in a long open corridor, cells up to sensor_range ahead are observed, and the one after stays unknown."""
+    maze = corridor_1x5
+    robot = Robot(rows=1, cols=5, start_cell=(0, 0), exit_cell=(0, 4), sensor_range=2)
+
+    robot.sense(maze)
+
+    assert robot.belief_map.get_wall(0, 0, Direction.EAST) == WallState.OPEN
+    assert robot.belief_map.get_wall(0, 1, Direction.EAST) == WallState.OPEN
+    assert robot.belief_map.get_wall(0, 2, Direction.EAST) == WallState.OPEN
+
+    for d in Direction:
+        if d == Direction.WEST:
+            continue
+        assert robot.belief_map.get_wall(0, 3, d) == WallState.UNKNOWN
+
+def test_doesnt_leave_grid(corridor_1x5):
+    """Doesn't leave the grid: sensing from the exit cell, facing out through the open exit wall, doesn't crash."""
+    maze = corridor_1x5
+    robot = Robot(rows=1, cols=5, start_cell=(0, 4), exit_cell=(0, 4), sensor_range=3)
+    
+    changes = robot.sense(maze)
+    assert isinstance(changes, list)
+
+def test_belief_matches_truth(grid_3x3_partial):
+    """Belief matches the truth: every non-UNKNOWN wall matches the real maze right after sensing."""
+    maze = grid_3x3_partial
+    robot = Robot(rows=3, cols=3, start_cell=(1, 1), exit_cell=(2, 2), sensor_range=1)
+    
+    robot.sense(maze)
+    
+    for r in range(3):
+        for c in range(3):
+            for d in Direction:
+                belief = robot.belief_map.get_wall(r, c, d)
+                if belief != WallState.UNKNOWN:
+                    true_open = maze.is_open(r, c, d)
+                    expected = WallState.OPEN if true_open else WallState.CLOSED
+                    assert belief == expected
+
+def test_change_detection(corridor_1x5):
+    """Change detection: sensing twice with no changes returns empty list; shift a wall and it returns the updated state."""
+    maze = corridor_1x5
+    robot = Robot(rows=1, cols=5, start_cell=(0, 0), exit_cell=(0, 4), sensor_range=2)
+    
+    first_changes = robot.sense(maze)
+    assert len(first_changes) > 0
+    
+    second_changes = robot.sense(maze)
+    assert second_changes == []
+    
+    maze.close_wall(0, 1, Direction.EAST)
+    
+    third_changes = robot.sense(maze)
+    assert (0, 1, Direction.EAST, WallState.CLOSED) in third_changes
+
+def test_move_mechanics(corridor_1x5):
+    """Move: open wall updates position, closed wall raises ValueError, exiting boundary raises ValueError."""
+    maze = corridor_1x5
+    robot = Robot(rows=1, cols=5, start_cell=(0, 0), exit_cell=(0, 4), sensor_range=1)
+    
+    robot.move(maze, Direction.EAST)
+    assert robot.current_cell == (0, 1)
+    
+    maze.close_wall(0, 1, Direction.EAST)
+    with pytest.raises(ValueError, match="Wall should be open"):
+        robot.move(maze, Direction.EAST)
+        
+    with pytest.raises(ValueError, match="Wall should be open"):
+        robot.move(maze, Direction.NORTH)
+
+def test_goal_conditions():
+    """Goal: at_goal is false at the start and true at the exit."""
+    robot = Robot(rows=3, cols=3, start_cell=(0, 0), exit_cell=(2, 2), sensor_range=1)
+    
+    assert robot.at_goal() is False
+    
+    robot.current_cell = (2, 2)
+    assert robot.at_goal() is True
