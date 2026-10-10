@@ -172,14 +172,16 @@ def main():
                     if not maze.is_open(r, c, d):
                         draw_wall(surface, r, c, d, CELL_SIZE, maze_offset_x, TOP_BAR, YELLOW)
         else:
+            maze_pixel_width = COLS * CELL_SIZE
+            maze_pixel_height = ROWS * CELL_SIZE
+            surface.fill(
+                GRAY_DIM, 
+                rect=(maze_offset_x, TOP_BAR, maze_pixel_width, maze_pixel_height)
+            )
+
             for r in range(ROWS):
                 for c in range(COLS):
-                    is_unseen = all(
-                        robot.belief_map.get_wall(r, c, d) == WallState.UNKNOWN
-                        for d in Direction
-                    )
-                    if is_unseen:
-                        draw_cell(surface, (r, c), FOG_COLOR, CELL_SIZE, maze_offset_x, TOP_BAR, 0)
+                    draw_cell(surface, (r, c), BLACK, CELL_SIZE, maze_offset_x, TOP_BAR, inset=1)
 
             draw_belief_maze(surface, robot, CELL_SIZE, maze_offset_x, TOP_BAR)
 

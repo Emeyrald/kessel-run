@@ -3,7 +3,6 @@ from kessel_run.maze import Direction
 from kessel_run.robot import WallState
 
 WHITE = (255, 255, 255)
-GRAY_DIM = (60, 60, 60) 
 
 def draw_grid_line(surface, row, col, dx, dy, cell_size, offset_x, offset_y, color):
     width = max(1, cell_size // 10)
@@ -61,9 +60,7 @@ def draw_robot(surface, cell, color, cell_size, offset_x, offset_y, radius_ratio
 def draw_belief_maze(surface, robot, cell_size, offset_x, offset_y):
     belief_map = robot.belief_map
     for array, (dx, dy) in [(belief_map.horizontal, (1, 0)), (belief_map.vertical, (0, 1))]:
-            for row_idx, row in enumerate(array):
-                for col_idx, state in enumerate(row):
-                    if state == WallState.CLOSED:
-                        draw_grid_line(surface, row_idx, col_idx, dx, dy, cell_size, offset_x, offset_y, WHITE)
-                    elif state == WallState.UNKNOWN:
-                        draw_grid_line(surface, row_idx, col_idx, dx, dy, cell_size, offset_x, offset_y, GRAY_DIM)
+        for row_idx, row in enumerate(array):
+            for col_idx, state in enumerate(row):
+                if state == WallState.CLOSED:
+                    draw_grid_line(surface, row_idx, col_idx, dx, dy, cell_size, offset_x, offset_y, WHITE)
