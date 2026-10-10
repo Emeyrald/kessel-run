@@ -4,7 +4,8 @@ import copy
 from kessel_run.maze import Maze, Direction
 from kessel_run.generation import generate, build_maze
 from kessel_run.shifting import shift_walls, make_shift_rng
-from kessel_run.robot import Robot, WallState
+from kessel_run.robot import Robot, WallState, BeliefMap
+from kessel_run.planners.astar import AStar
 
 ROWS = 3
 COLS = 3
@@ -611,7 +612,7 @@ def test_change_detection(corridor_1x5):
     maze.close_wall(0, 1, Direction.EAST)
     
     third_changes = robot.sense(maze)
-    assert (0, 1, Direction.EAST, WallState.CLOSED) in third_changes
+    assert (0, 1, Direction.EAST, WallState.OPEN, WallState.CLOSED) in third_changes
 
 def test_move_mechanics(corridor_1x5):
     """Move: open wall updates position, closed wall raises ValueError, exiting boundary raises ValueError."""
@@ -628,11 +629,163 @@ def test_move_mechanics(corridor_1x5):
     with pytest.raises(ValueError, match="Wall should be open"):
         robot.move(maze, Direction.NORTH)
 
-def test_goal_conditions():
-    """Goal: at_goal is false at the start and true at the exit."""
+def test_exit_conditions():
+    """Exit: at_exit is false at the start and true at the exit."""
     robot = Robot(rows=3, cols=3, start_cell=(0, 0), exit_cell=(2, 2), sensor_range=1)
     
-    assert robot.at_goal() is False
+    assert robot.at_exit() is False
     
     robot.current_cell = (2, 2)
-    assert robot.at_goal() is True
+    assert robot.at_exit() is True
+
+@pytest.fixture
+def clean_planner():
+    """Helper fixture providing a 3x3 open setup for isolated testing."""
+    maze = Maze(rows=3, cols=3)
+    # Open all paths for an empty 3x3 grid
+    for r in range(3):
+        for c in range(3):
+            for d in Direction:
+                neighbor = maze.neighbor(r, c, d)
+                if neighbor is not None:
+                    maze.open_wall(r, c, d)
+    return maze
+
+def test_astar_known_maze_matches_bfs(grid_3x3_partial):
+    """Known maze: path length equals the true BFS distance."""
+    maze = grid_3x3_partial
+    exit_cell = (2, 2)
+    
+    # 1. Initialize a true BeliefMap matching the maze size
+    belief = BeliefMap(maze.rows, maze.cols)
+    
+    # 2. Force the belief map to copy the true maze structure exactly
+    for r in range(3):
+        for c in range(3):
+            for d in Direction:
+                state = WallState.OPEN if maze.is_open(r, c, d) else WallState.CLOSED
+                belief.set_wall(r, c, d, state)
+                
+    # 3. Instantiate the planner with the real BeliefMap
+    planner = AStar(belief, exit_cell)
+    
+    # True BFS distance for grid_3x3_partial is 5 steps (6 path cells)
+    path = planner._search((0, 0), sensor_range=3)
+    assert len(path) == 5  # 4 steps + start cell
+    assert len(path) - 1 == maze.distances_from((0, 0))[exit_cell]
+
+def test_astar_all_unknown_matches_manhattan(clean_planner):
+    """All unknown: path length equals the Manhattan distance to the goal."""
+    exit_cell = (2, 2)
+    
+    # Create a proper BeliefMap (it initializes to all UNKNOWN by default)
+    belief = BeliefMap(clean_planner.rows, clean_planner.cols)
+    planner = AStar(belief, exit_cell)
+                
+    path = planner._search((0, 0), sensor_range=3)
+    # Manhattan distance from (0,0) to (2,2) is |2-0| + |2-0| = 4 steps (5 path cells)
+    assert len(path) == 5
+    assert len(path) - 1 == (abs(0 - 2) + abs(0 - 2))
+
+def test_update_closed_on_path_triggers_replan(clean_planner):
+    """Closed on the path: triggers a replan flag."""
+    planner = AStar(clean_planner, (2, 2))
+    
+    # Establish a path through (0,0) -> (0,1)
+    planner.current_path = [(0, 0), (0, 1), (0, 2), (1, 2), (2, 2)]
+    planner.path_edges = {frozenset([(0, 0), (0, 1)]), frozenset([(0, 1), (0, 2)])}
+    planner._replan_pending = False
+    
+    # Change a wall that directly cuts across our path edge
+    changes = [(0, 0, Direction.EAST, WallState.UNKNOWN, WallState.CLOSED)]
+    planner.update(changes)
+    
+    assert planner._replan_pending is True
+
+def test_update_closed_off_path_no_replan(clean_planner):
+    """Closed off the path: no replan is triggered."""
+    planner = AStar(clean_planner, (2, 2))
+    
+    # Establish a path avoiding row 2 entirely
+    planner.current_path = [(0, 0), (0, 1), (0, 2), (1, 2), (2, 2)]
+    planner.path_edges = {frozenset([(0, 0), (0, 1)])}
+    planner._replan_pending = False
+    
+    # Block a wall way off the path down at (2,0)
+    changes = [(2, 0, Direction.EAST, WallState.UNKNOWN, WallState.CLOSED)]
+    planner.update(changes)
+    
+    assert planner._replan_pending is False
+
+def test_update_unknown_to_open_no_replan(clean_planner):
+    """Unknown -> open: no replan triggered because unknown is already assumed passable."""
+    planner = AStar(clean_planner, (2, 2))
+    planner.current_path = [(0, 0), (0, 1)]
+    planner.path_edges = {frozenset([(0, 0), (0, 1)])}
+    planner._replan_pending = False
+    
+    changes = [(0, 0, Direction.EAST, WallState.UNKNOWN, WallState.OPEN)]
+    planner.update(changes)
+    
+    assert planner._replan_pending is False
+
+def test_update_closed_to_open_triggers_replan(clean_planner):
+    """Closed -> open: triggers a replan because a potential shortcut became available."""
+    planner = AStar(clean_planner, (2, 2))
+    planner.current_path = [(0, 0), (1, 0), (2, 0)]
+    planner._replan_pending = False
+    
+    # A wall completely unrelated to our path changes from closed to open
+    changes = [(0, 1, Direction.EAST, WallState.CLOSED, WallState.OPEN)]
+    planner.update(changes)
+    
+    assert planner._replan_pending is True
+
+def test_next_move_returns_correct_direction(clean_planner):
+    """next_move returns the exact direction enum matching the next forward step."""
+    planner = AStar(clean_planner, (2, 2))
+    planner.current_path = [(0, 0), (1, 0), (2, 0)] # Going SOUTH
+    planner._replan_pending = False
+    
+    direction = planner.next_move((0, 0), sensor_range=3)
+    assert direction == Direction.SOUTH
+    # Ensure the old cell is consumed and the path is tracking correctly
+    assert planner.current_path == [(1, 0), (2, 0)]
+
+def test_no_path_recovery_policy_kicks_in(clean_planner):
+    """No path in the belief: recovery policy resets unobserved walls and returns a valid path."""
+    exit_cell = (2, 2)
+    belief = BeliefMap(clean_planner.rows, clean_planner.cols)
+    planner = AStar(belief, exit_cell)
+    
+    # Physically trap the robot by closing walls around (0,0) inside its belief
+    planner.belief_map.set_wall(0, 0, Direction.EAST, WallState.CLOSED)
+    planner.belief_map.set_wall(0, 0, Direction.SOUTH, WallState.CLOSED)
+    
+    # If sensor range is 0, the robot can't see those walls are closed natively,
+    # so when search runs out of paths, recovery triggers and resets them.
+    path = planner._search((0, 0), sensor_range=0)
+    
+    assert path is not None
+    assert len(path) > 1
+    # Check that recovery wiped out the blocking states back to UNKNOWN
+    assert planner.belief_map.get_wall(0, 0, Direction.EAST) == WallState.UNKNOWN
+
+def test_nodes_expanded_metric_tracking(clean_planner):
+    """Stats: nodes expanded tracks pops on searches and remains static when no searches occur."""
+    exit_cell = (2, 2)
+    belief = BeliefMap(clean_planner.rows, clean_planner.cols)
+    planner = AStar(belief, exit_cell)
+    
+    initial_expansions = planner.stats["nodes_expanded"]
+    
+    # First search should perform active node expansions
+    planner._search((0, 0), sensor_range=3)
+    first_run_expansions = planner.stats["nodes_expanded"]
+    assert first_run_expansions > initial_expansions
+    
+    # Call next_move without causing a replan; nodes_expanded must remain completely unchanged
+    planner._replan_pending = False
+    planner.next_move((0, 0), sensor_range=3)
+    
+    assert planner.stats["nodes_expanded"] == first_run_expansions
