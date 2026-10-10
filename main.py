@@ -2,16 +2,20 @@ import pygame
 import pygame.freetype
 import random
 from kessel_run.generation import build_maze
-from kessel_run.vis import draw_maze, draw_cell, draw_wall, draw_robot, draw_belief_maze
+from kessel_run.vis import draw_maze, draw_cell, draw_wall, draw_robot, draw_belief_maze, cell_center
 from kessel_run.shifting import make_shift_rng, shift_walls
 from kessel_run.robot import Robot, WallState
 from kessel_run.maze import Direction
+from kessel_run.planners.astar import AStar
 
-ROWS = 15
-COLS = 15
-CELL_SIZE = 20
+ROWS = 50
+COLS = 50
+TARGET_GRID_WIDTH = 600
+TARGET_GRID_HEIGHT = 600
+CELL_SIZE = min(TARGET_GRID_WIDTH // COLS, TARGET_GRID_HEIGHT // ROWS)
 MARGIN = 20
 TOP_BAR = 40
+STATS_BAR = 30
 BOTTOM_BAR = 25
 TOP_FONT_SIZE = 20
 BOTTOM_FONT_SIZE = 20
@@ -22,6 +26,8 @@ GREEN = (40, 167, 69)
 RED = (220, 53, 69)
 YELLOW = (255, 200, 0)
 BLUE = (0, 150, 255)
+CYAN = (0, 255, 255)
+GRAY_DIM = (60, 60, 60) 
 INSET = 3
 CONTROL_TEXT = "Arrows: Move    [V] View    [R] Reset   [+/-] Loops   [SPACE] Pause"
 PAUSE_TEXT = "Arrows: Move    [V] View    [R] Reset   [+/-] Loops   [SPACE] Unpause"
@@ -50,7 +56,10 @@ def main():
     maze = build_maze(ROWS, COLS, seed, loop_fraction)
     shift_rng = make_shift_rng(seed)
     robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
-    robot.sense(maze)
+    initial_changes = robot.sense(maze)
+
+    astar = AStar(robot.belief_map, maze.exit_cell)
+    astar.update(initial_changes)
 
     top_font = pygame.freetype.SysFont("Arial", TOP_FONT_SIZE)
     bottom_font = pygame.freetype.SysFont("Arial", BOTTOM_FONT_SIZE)
@@ -67,10 +76,13 @@ def main():
     loop_x = width - MARGIN - text_loop.width
     text_y = (TOP_BAR - text_loop.height) / 2
 
-    bottom_bar_y = TOP_BAR + ROWS * CELL_SIZE + MARGIN
+    maze_bottom_y = TOP_BAR + ROWS * CELL_SIZE + MARGIN
+    stats_bar_y = maze_bottom_y
+    bottom_bar_y = stats_bar_y + STATS_BAR
     height = bottom_bar_y + BOTTOM_BAR
     surface = pygame.display.set_mode((width, height))
 
+    stats_text_y = stats_bar_y + (STATS_BAR - bottom_font.get_rect("A").height) / 2
     bottom_text_y = bottom_bar_y + (BOTTOM_BAR - text_controls.height) / 2
     bottom_text_x = (width - text_controls.width) / 2
 
@@ -103,19 +115,14 @@ def main():
                     paused = not paused
                 if event.key == pygame.K_v:
                     view_mode = "BELIEF" if view_mode == "TRUE" else "TRUE"
-                if not paused and event.key in KEY_TO_DIRECTION:
-                    target_direction = KEY_TO_DIRECTION[event.key]
-                    try:
-                        robot.move(maze, target_direction)
-                        robot.sense(maze)
-                    except ValueError:
-                        pass
 
         if rebuild:
             maze = build_maze(ROWS, COLS, seed, loop_fraction)
             shift_rng = make_shift_rng(seed)
             robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
-            robot.sense(maze)
+            initial_changes = robot.sense(maze)
+            astar = AStar(robot.belief_map, maze.exit_cell)
+            astar.update(initial_changes)
             frames = 0
             ticks = 0
             changed_walls = []
@@ -126,12 +133,26 @@ def main():
             frames += 1
             if flash_countdown > 0:
                 flash_countdown -= 1
+
             if frames % FRAMES_PER_TICK == 0:
                 ticks += 1
+
                 if ticks % SHIFT_EVERY == 0:
                     changed_walls = shift_walls(maze, shift_rng, SHIFT_COUNT)
                     flash_countdown = FLASH_FRAMES
-                    robot.sense(maze)
+
+                    sensory_changes = robot.sense(maze)
+                    astar.update(sensory_changes)
+
+                if not robot.at_exit():
+                    try:
+                        target_direction = astar.next_move(robot.current_cell, SENSOR_RANGE)
+                        robot.move(maze, target_direction)
+
+                        step_changes = robot.sense(maze)
+                        astar.update(step_changes)
+                    except (ValueError, IndexError) as e:
+                        pass
 
         surface.fill(BLACK)
 
@@ -165,10 +186,28 @@ def main():
         draw_cell(surface, maze.start_cell, GREEN, CELL_SIZE, maze_offset_x, TOP_BAR, INSET)
         draw_cell(surface, maze.exit_cell, RED, CELL_SIZE, maze_offset_x, TOP_BAR, INSET)
 
+        if view_mode == "BELIEF":
+            planned_path = getattr(astar, 'current_path', None)
+            if planned_path and len(planned_path) >= 2:
+                path_points = [
+                    cell_center(cell, CELL_SIZE, maze_offset_x, TOP_BAR)
+                    for cell in planned_path
+                ]
+                pygame.draw.lines(surface, CYAN, False, path_points, width=4)
+
         draw_robot(surface, robot.current_cell, BLUE, CELL_SIZE, maze_offset_x, TOP_BAR)
 
-        pygame.display.flip()
+        stats_string = (
+            f"Replans: {astar.stats["replans"]} ({astar.stats["same_path_replans"]} same)    "
+            f"Nodes: {astar.stats["nodes_expanded"]}    "
+            f"Planning Time: {(astar.stats["total_planning_time"] * 1000):.2f} ms"
+        )
 
+        stats_rect = bottom_font.get_rect(stats_string)
+        stats_text_x = (width - stats_rect.width) // 2
+        bottom_font.render_to(surface, (stats_text_x, stats_text_y), stats_string, WHITE)
+
+        pygame.display.flip()
         clock.tick(60)
 
     pygame.quit()

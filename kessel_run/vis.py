@@ -45,15 +45,18 @@ def draw_cell(surface, cell, color, cell_size, offset_x, offset_y, inset):
     height = cell_size - 2 * inset
     surface.fill(color, rect=(x, y, width, height))
 
-def draw_robot(surface, cell, color, cell_size, offset_x, offset_y, radius_ratio=0.35):
-    row, col = cell
+def cell_center(cell, cell_size, offset_x, offset_y):
+    r, c = cell
+    center_x = offset_x + (c * cell_size) + (cell_size // 2)
+    center_y = offset_y + (r * cell_size) + (cell_size // 2)
+    return (center_x, center_y)
 
-    center_x = offset_x + (col * cell_size) + (cell_size // 2)
-    center_y = offset_y + (row * cell_size) + (cell_size // 2)
+def draw_robot(surface, cell, color, cell_size, offset_x, offset_y, radius_ratio=0.35):
+    center = cell_center(cell, cell_size, offset_x, offset_y)
 
     radius = int(cell_size * radius_ratio)
 
-    pygame.draw.circle(surface, color, (center_x, center_y), radius)
+    pygame.draw.circle(surface, color, center, radius)
 
 def draw_belief_maze(surface, robot, cell_size, offset_x, offset_y):
     belief_map = robot.belief_map
