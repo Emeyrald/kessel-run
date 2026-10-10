@@ -135,3 +135,32 @@ class Maze(WallGrid):
                     walls.append((row, col, Direction.EAST))
 
         return walls
+
+    def are_connected(self, cell_a, cell_b, closed_wall_info):
+        wr, wc, wd = closed_wall_info
+        ignored_neighbor = self.neighbor(wr, wc, wd)
+        opposite_direction = wd.opposite
+
+        queue = deque([cell_a])
+        visited = {cell_a}
+
+        while queue:
+            cell = queue.popleft()
+            if cell == cell_b:
+                return True
+
+            r, c = cell
+            for d in Direction:
+                if (r, c) == (wr, wc) and d == wd:
+                    continue
+                if (r, c) == ignored_neighbor and d == opposite_direction:
+                    continue
+                if not self.is_open(r, c, d):
+                    continue
+
+                neighbor = self.neighbor(r, c, d)
+                if neighbor is not None and neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+
+        return False
