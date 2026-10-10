@@ -25,8 +25,9 @@ class Robot:
             true_state = WallState.OPEN if maze.is_open(row, col, side_dir) else WallState.CLOSED
 
             if self.belief_map.get_wall(row, col, side_dir) != true_state:
+                old_state = self.belief_map.get_wall(row, col, side_dir)
                 self.belief_map.set_wall(row, col, side_dir, true_state)
-                changed.append((row, col, side_dir, true_state))
+                changed.append((row, col, side_dir, old_state, true_state))
 
     def sense(self, maze):
         """
@@ -72,5 +73,5 @@ class Robot:
 
         self.current_cell = next_cell
 
-    def at_goal(self):
+    def at_exit(self):
         return self.current_cell == self.exit_cell
