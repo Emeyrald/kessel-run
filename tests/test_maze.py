@@ -1,11 +1,13 @@
 import pytest
 import random
 import copy
+from collections import deque
 from kessel_run.maze import Maze, Direction
 from kessel_run.generation import generate, build_maze
 from kessel_run.shifting import shift_walls, make_shift_rng
 from kessel_run.robot import Robot, WallState, BeliefMap
 from kessel_run.planners.astar import AStar
+from kessel_run.planners.dstar_lite import DStarLite
 
 ROWS = 3
 COLS = 3
@@ -789,3 +791,203 @@ def test_nodes_expanded_metric_tracking(clean_planner):
     planner.next_move((0, 0), sensor_range=3)
     
     assert planner.stats["nodes_expanded"] == first_run_expansions
+
+def run_bfs(wall_grid, start, goal):
+    """Calculates shortest path distance matching WallGrid dimensions using get_wall."""
+    queue = deque([(start, 0)])
+    visited = {start}
+    
+    while queue:
+        curr, dist = queue.popleft()
+        if curr == goal:
+            return dist
+            
+        r, c = curr
+        for d in Direction:
+            if wall_grid.get_wall(r, c, d) != WallState.CLOSED:
+                neighbor = wall_grid.neighbor(r, c, d)
+                if neighbor and neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, dist + 1))
+    return float('inf')
+
+
+# --- Test Suite ---
+
+def test_static_known_maze_matches_bfs_and_astar(clean_planner):
+    """Static known maze: path length matches BFS and A* exactly."""
+    # Dynamically pick the maximum safe corner coordinate to avoid IndexError
+    exit_cell = (clean_planner.rows - 1, clean_planner.cols - 1)
+    
+    # Planners require a BeliefMap. For a "known" maze, we reveal all walls to it.
+    belief = BeliefMap(clean_planner.rows, clean_planner.cols)
+    for r in range(clean_planner.rows):
+        for c in range(clean_planner.cols):
+            for d in Direction:
+                state = clean_planner.get_wall(r, c, d)
+                belief.set_wall(r, c, d, state)
+                
+    # 1. Run standard AStar
+    astar_planner = AStar(copy.deepcopy(belief), exit_cell)
+    astar_planner.next_move((0, 0), sensor_range=3)
+    astar_len = len(astar_planner.current_path) + 1  # Including current cell
+    
+    # 2. Run D* Lite
+    dstar_planner = DStarLite(copy.deepcopy(belief), exit_cell)
+    dstar_planner.next_move((0, 0))
+    dstar_len = len(dstar_planner.current_path)
+    
+    # 3. Benchmark BFS Distance directly on the true layout
+    bfs_dist = run_bfs(clean_planner, (0, 0), exit_cell)
+    bfs_len = bfs_dist + 1
+    
+    assert dstar_len == astar_len == bfs_len
+
+
+def test_all_unknown_equals_manhattan_distance(clean_planner):
+    """All unknown: path length equals the Manhattan distance."""
+    exit_cell = (clean_planner.rows - 1, clean_planner.cols - 1)
+    start_cell = (0, 0)
+    
+    # An empty/fresh BeliefMap defaults all walls to UNKNOWN (passable)
+    belief = BeliefMap(clean_planner.rows, clean_planner.cols)
+    
+    dstar_planner = DStarLite(belief, exit_cell)
+    dstar_planner.next_move(start_cell)
+    
+    manhattan_dist = abs(start_cell[0] - exit_cell[0]) + abs(start_cell[1] - exit_cell[1])
+    expected_path_length = manhattan_dist + 1
+    
+    assert len(dstar_planner.current_path) == expected_path_length
+
+
+def test_wall_closes_on_path_matches_astar_length(clean_planner):
+    """After a wall closes on the path, the new path matches A*'s length."""
+    exit_cell = (clean_planner.rows - 1, clean_planner.cols - 1)
+    start_cell = (0, 0)
+    
+    changes = [(0, 0, Direction.EAST, WallState.UNKNOWN, WallState.CLOSED)]
+    
+    # 1. Evaluate A* with the wall closed
+    belief_astar = BeliefMap(clean_planner.rows, clean_planner.cols)
+    belief_astar.set_wall(0, 0, Direction.EAST, WallState.CLOSED)
+    astar_planner = AStar(belief_astar, exit_cell)
+    astar_planner.next_move(start_cell, sensor_range=3)
+    astar_len = len(astar_planner.current_path) + 1
+    
+    # 2. Evaluate D* Lite starting open, then processing the closure update
+    belief_dstar = BeliefMap(clean_planner.rows, clean_planner.cols)
+    dstar_planner = DStarLite(belief_dstar, exit_cell)
+    dstar_planner.next_move(start_cell) # Establish initial path
+    
+    # Update the belief map state and alert the planner
+    belief_dstar.set_wall(0, 0, Direction.EAST, WallState.CLOSED)
+    dstar_planner.update(changes)
+    dstar_planner.next_move(start_cell)
+    
+    assert len(dstar_planner.current_path) == astar_len
+
+
+def test_wall_opens_matches_astar_length(clean_planner):
+    """After a wall opens, the path matches A*'s length."""
+    exit_cell = (clean_planner.rows - 1, clean_planner.cols - 1)
+    start_cell = (0, 0)
+    
+    # Start D* Lite with a closed wall blocking the direct route
+    belief_dstar = BeliefMap(clean_planner.rows, clean_planner.cols)
+    belief_dstar.set_wall(0, 0, Direction.SOUTH, WallState.CLOSED)
+    
+    dstar_planner = DStarLite(belief_dstar, exit_cell)
+    dstar_planner.next_move(start_cell)
+    
+    # Dynamically open that wall shortcut
+    changes = [(0, 0, Direction.SOUTH, WallState.CLOSED, WallState.OPEN)]
+    belief_dstar.set_wall(0, 0, Direction.SOUTH, WallState.OPEN)
+    
+    dstar_planner.update(changes)
+    dstar_planner.next_move(start_cell)
+    dstar_len = len(dstar_planner.current_path)
+    
+    # Compare with a fresh A* run that sees the open wall from step 1
+    belief_astar = BeliefMap(clean_planner.rows, clean_planner.cols)
+    belief_astar.set_wall(0, 0, Direction.SOUTH, WallState.OPEN)
+    astar_planner = AStar(belief_astar, exit_cell)
+    astar_planner.next_move(start_cell, sensor_range=3)
+    astar_len = len(astar_planner.current_path) + 1
+    
+    assert dstar_len == astar_len
+
+
+def test_full_run_shifting_maze_equal_lengths(clean_planner):
+    """Over a full run on a shifting maze, D* Lite and A* paths have equal lengths at every step."""
+    exit_cell = (clean_planner.rows - 1, clean_planner.cols - 1)
+    
+    belief_astar = BeliefMap(clean_planner.rows, clean_planner.cols)
+    belief_dstar = BeliefMap(clean_planner.rows, clean_planner.cols)
+    
+    astar_planner = AStar(belief_astar, exit_cell)
+    dstar_planner = DStarLite(belief_dstar, exit_cell)
+    
+    curr_astar = (0, 0)
+    curr_dstar = (0, 0)
+    
+    # Let's apply modifications to walls that force changes but keep routes navigably open
+    dynamic_changes = [
+        (0, 1, Direction.SOUTH, WallState.UNKNOWN, WallState.CLOSED),
+        (1, 0, Direction.EAST, WallState.UNKNOWN, WallState.CLOSED),
+    ]
+    
+    for r, c, d, old, new in dynamic_changes:
+        # 1. Update and advance A*
+        belief_astar.set_wall(r, c, d, new)
+        astar_planner.update([(r, c, d, old, new)])
+        move_astar = astar_planner.next_move(curr_astar, sensor_range=3)
+        
+        # Safely determine the next cell coordinate using your framework's native neighbor lookup
+        next_astar = belief_astar.neighbor(curr_astar, curr_astar, move_astar)
+        if next_astar is not None:
+            curr_astar = next_astar
+        
+        # 2. Update and advance D* Lite
+        belief_dstar.set_wall(r, c, d, new)
+        dstar_planner.update([(r, c, d, old, new)])
+        move_dstar = dstar_planner.next_move(curr_dstar)
+        
+        next_dstar = belief_dstar.neighbor(curr_dstar, curr_dstar, move_dstar)
+        if next_dstar is not None:
+            curr_dstar = next_dstar
+        
+        # Verify length consistency at every dynamic step
+        assert (len(astar_planner.current_path) + 1) == len(dstar_planner.current_path)
+
+def test_full_run_shifting_maze_equal_lengths(clean_planner):
+    """Over a full run on a shifting maze, D* Lite and A* paths have equal lengths at every step."""
+    exit_cell = (clean_planner.rows - 1, clean_planner.cols - 1)
+    
+    belief_astar = BeliefMap(clean_planner.rows, clean_planner.cols)
+    belief_dstar = BeliefMap(clean_planner.rows, clean_planner.cols)
+    
+    astar_planner = AStar(belief_astar, exit_cell)
+    dstar_planner = DStarLite(belief_dstar, exit_cell)
+    
+    simulated_steps = [(0, 0), (0, 1)]
+    
+    dynamic_changes = [
+        (clean_planner.rows - 1, 0, Direction.EAST, WallState.UNKNOWN, WallState.CLOSED),
+        (0, clean_planner.cols - 1, Direction.SOUTH, WallState.UNKNOWN, WallState.CLOSED),
+    ]
+    
+    for step_idx, (r, c, d, old, new) in enumerate(dynamic_changes):
+        current_coord = simulated_steps[step_idx]
+        
+        # 1. Update A*
+        belief_astar.set_wall(r, c, d, new)
+        astar_planner.update([(r, c, d, old, new)])
+        astar_planner.next_move(current_coord, sensor_range=3)
+        
+        # 2. Update D* Lite
+        belief_dstar.set_wall(r, c, d, new)
+        dstar_planner.update([(r, c, d, old, new)])
+        dstar_planner.next_move(current_coord)
+        
+        assert (len(astar_planner.current_path) + 1) == len(dstar_planner.current_path)

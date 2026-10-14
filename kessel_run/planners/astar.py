@@ -62,7 +62,6 @@ class AStar(Planner):
 
     def _search(self, current_cell, sensor_range):
         exit_cell = self.exit_cell
-        belief_map = self.belief_map
         open_set = []
         heapq.heapify(open_set)
 
