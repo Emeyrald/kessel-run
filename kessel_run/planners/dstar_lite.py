@@ -128,8 +128,10 @@ class DStarLite(Planner):
                 self.update_vertex(neighbor)
 
             if self.s_start is not None:
+                replans_before = self.stats["replans"]
                 self.compute_shortest_path()
-                self.current_path = self.reconstruct_path(self.s_start)
+                if changes or self.stats["replans"] != replans_before:
+                    self.current_path = self.reconstruct_path(self.s_start)
                 
     def next_move(self, current_cell, sensor_range):
         self.s_start = current_cell
@@ -140,7 +142,12 @@ class DStarLite(Planner):
             self.km += self.heuristic(self.s_last, self.s_start)
             self.s_last = self.s_start
 
-        self.current_path = self.reconstruct_path(current_cell)
+        if self.current_path[:1] != [current_cell]:
+            if len(self.current_path) > 1 and self.current_path[1] == current_cell:
+                self.current_path.pop(0)
+            else:
+                self.current_path = self.reconstruct_path(current_cell)
+
 
         if len(self.current_path) < 2:
             with self.time_planning():
