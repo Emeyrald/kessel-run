@@ -130,7 +130,7 @@ def sweep_configs(sweep_names):
 def git_info():
     try:
         commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-        dirty = bool(subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout.strip())
+        dirty = bool(subprocess.run(["git", "status", "--porcelain", "--", "*.py", "requirements.txt"], capture_output=True, text=True, check=True).stdout.strip())
     except (OSError, subprocess.CalledProcessError):
         return "unknown", ""
     return commit, dirty
