@@ -37,8 +37,8 @@ MAGENTA = (255, 0, 255)
 GRAY_DIM = (60, 60, 60) 
 INSET = 2
 
-CONTROL_TEXT = "Arrows: Move    [V] View    [R] Reset   [+/-] Loops   [SPACE] Pause"
-PAUSE_TEXT = "Arrows: Move    [V] View    [R] Reset   [+/-] Loops   [SPACE] Unpause"
+CONTROL_TEXT = "Arrows: Move    [R] Reset   [+/-] Loops   [SPACE] Pause"
+PAUSE_TEXT = "Arrows: Move    [R] Reset   [+/-] Loops   [SPACE] Unpause"
 MAX_LOOPS = 1.0
 MIN_LOOPS = 0.0
 LOOP_FRACTION = 0.1
