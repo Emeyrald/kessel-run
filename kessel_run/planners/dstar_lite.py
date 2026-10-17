@@ -110,7 +110,13 @@ class DStarLite(Planner):
 
         return total_path
     
-    def update(self, changes):
+    def update(self, changes, current_robot_cell=None):
+        if current_robot_cell is not None:
+            self.s_start = current_robot_cell
+            if self.s_last is not None:
+                self.km += self.heuristic(self.s_last, self.s_start)
+                self.s_last = self.s_start
+
         with self.time_planning():
             for r, c, d, old_state, new_state in changes:
                 neighbor = self.belief_map.neighbor(r, c, d)
@@ -118,12 +124,13 @@ class DStarLite(Planner):
                     continue
 
                 current_cell = (r, c)
-
                 self.update_vertex(current_cell)
                 self.update_vertex(neighbor)
 
-            self.compute_shortest_path()
-
+            if self.s_start is not None:
+                self.compute_shortest_path()
+                self.current_path = self.reconstruct_path(self.s_start)
+                
     def next_move(self, current_cell, sensor_range):
         self.s_start = current_cell
         if self.s_last is None:
@@ -138,7 +145,7 @@ class DStarLite(Planner):
         if len(self.current_path) < 2:
             with self.time_planning():
                 self._recover_no_path(current_cell, sensor_range)
-                
+
                 for r in range(self.belief_map.rows):
                     for c in range(self.belief_map.cols):
                         self.update_vertex((r, c))
@@ -156,3 +163,4 @@ class DStarLite(Planner):
 
         move_direction = Direction((dr, dc))
         return move_direction
+    

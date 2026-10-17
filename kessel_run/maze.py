@@ -122,45 +122,40 @@ class Maze(WallGrid):
 
         return walls
 
-    def open_interior_walls(self):
-        walls = []
-        for row in range(self.rows):
-            for col in range(self.cols):
-                south_neighbor = self.neighbor(row, col, Direction.SOUTH)
-                if south_neighbor is not None and self.is_open(row, col, Direction.SOUTH):
-                    walls.append((row, col, Direction.SOUTH))
-
-                east_neighbor = self.neighbor(row, col, Direction.EAST)
-                if east_neighbor is not None and self.is_open(row, col, Direction.EAST):
-                    walls.append((row, col, Direction.EAST))
-
-        return walls
-
-    def are_connected(self, cell_a, cell_b, closed_wall_info):
-        wr, wc, wd = closed_wall_info
-        ignored_neighbor = self.neighbor(wr, wc, wd)
-        opposite_direction = wd.opposite
-
-        queue = deque([cell_a])
-        visited = {cell_a}
+    def path_walls(self, start, goal):
+        """List of open walls along a shortest path from start to goal, as (row, col, SOUTH|EAST). Empty if unreachable."""
+        queue = deque([start])
+        came_from = {start: None}
 
         while queue:
             cell = queue.popleft()
-            if cell == cell_b:
-                return True
-
-            r, c = cell
+            if cell == goal:
+                break
+            row, col = cell
             for d in Direction:
-                if (r, c) == (wr, wc) and d == wd:
+                if not self.is_open(row, col, d):
                     continue
-                if (r, c) == ignored_neighbor and d == opposite_direction:
+                neighbor = self.neighbor(row, col, d)
+                if neighbor is None or neighbor in came_from:
                     continue
-                if not self.is_open(r, c, d):
-                    continue
+                came_from[neighbor] = (cell, d)
+                queue.append(neighbor)
 
-                neighbor = self.neighbor(r, c, d)
-                if neighbor is not None and neighbor not in visited:
-                    visited.add(neighbor)
-                    queue.append(neighbor)
+        if goal not in came_from:
+            return []
 
-        return False
+        walls = []
+        cell = goal
+        while came_from[cell] is not None:
+            prev, d = came_from[cell]
+            pr, pc = prev
+            match d:
+                case Direction.NORTH:
+                    walls.append((pr - 1, pc, Direction.SOUTH))
+                case Direction.WEST:
+                    walls.append((pr, pc - 1, Direction.EAST))
+                case _:
+                    walls.append((pr, pc, d))
+            cell = prev
+
+        return walls

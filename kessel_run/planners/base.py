@@ -31,7 +31,7 @@ class Planner(ABC):
         pass
 
     @abstractmethod
-    def next_move(self, current_cell):
+    def next_move(self, current_cell, sensor_range):
         """
         Determines the next coordinate node to navigate towards.
         Must be implemented by subclasses.

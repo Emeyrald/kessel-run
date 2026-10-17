@@ -2,23 +2,28 @@ import pygame
 import pygame.freetype
 import random
 from kessel_run.generation import build_maze
-from kessel_run.vis import draw_maze, draw_cell, draw_wall, draw_robot, draw_belief_maze, cell_center
+from kessel_run.renderer import Renderer
 from kessel_run.shifting import make_shift_rng, shift_walls
 from kessel_run.robot import Robot, WallState
 from kessel_run.maze import Direction
 from kessel_run.planners.astar import AStar
+from kessel_run.planners.dstar_lite import DStarLite
 
 ROWS = 50
 COLS = 50
-TARGET_GRID_WIDTH = 600
-TARGET_GRID_HEIGHT = 600
+
+TARGET_GRID_WIDTH = 400
+TARGET_GRID_HEIGHT = 400
 CELL_SIZE = min(TARGET_GRID_WIDTH // COLS, TARGET_GRID_HEIGHT // ROWS)
+
 MARGIN = 20
 TOP_BAR = 40
-STATS_BAR = 30
+STATS_BAR = 80
 BOTTOM_BAR = 25
 TOP_FONT_SIZE = 20
 BOTTOM_FONT_SIZE = 20
+LINE_HEIGHT = 18
+
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 FOG_COLOR = (15, 15, 15)
@@ -27,8 +32,10 @@ RED = (220, 53, 69)
 YELLOW = (255, 200, 0)
 BLUE = (0, 150, 255)
 CYAN = (0, 255, 255)
+MAGENTA = (255, 0, 255)
 GRAY_DIM = (60, 60, 60) 
-INSET = 3
+INSET = 2
+
 CONTROL_TEXT = "Arrows: Move    [V] View    [R] Reset   [+/-] Loops   [SPACE] Pause"
 PAUSE_TEXT = "Arrows: Move    [V] View    [R] Reset   [+/-] Loops   [SPACE] Unpause"
 MAX_LOOPS = 1.0
@@ -37,9 +44,9 @@ LOOP_FRACTION = 0.1
 LOOP_STEP = 0.05
 FRAMES_PER_TICK = 10 # 10 frames = 6 ticks per second
 SHIFT_EVERY = 12 # 12 ticks = 2 seconds
-SHIFT_COUNT = 3
+SHIFT_COUNT = 8
 FLASH_FRAMES = 30
-SENSOR_RANGE = 3
+SENSOR_RANGE = 5
 
 KEY_TO_DIRECTION = {
     pygame.K_UP: Direction.NORTH,
@@ -53,50 +60,59 @@ def main():
 
     seed = random.randint(1, 1000000)
     loop_fraction = LOOP_FRACTION
+
     maze = build_maze(ROWS, COLS, seed, loop_fraction)
     shift_rng = make_shift_rng(seed)
-    robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
-    initial_changes = robot.sense(maze)
 
-    astar = AStar(robot.belief_map, maze.exit_cell)
+    astar_robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
+    dstar_robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
+
+    initial_changes = astar_robot.sense(maze)
+    astar = AStar(astar_robot.belief_map, maze.exit_cell)
     astar.update(initial_changes)
+
+    dstar_lite = DStarLite(dstar_robot.belief_map, maze.exit_cell)
+    dstar_lite.update(initial_changes, dstar_robot.current_cell)
 
     top_font = pygame.freetype.SysFont("Arial", TOP_FONT_SIZE)
     bottom_font = pygame.freetype.SysFont("Arial", BOTTOM_FONT_SIZE)
 
+    grid_pixel_width = COLS * CELL_SIZE
+    grid_pixel_height = ROWS * CELL_SIZE
+
+    left_offset_x = MARGIN
+    mid_offset_x = left_offset_x + grid_pixel_width + MARGIN
+    right_offset_x = mid_offset_x + grid_pixel_width + MARGIN
+
+    width = right_offset_x + grid_pixel_width + MARGIN
     text_loop = top_font.get_rect("Loops: 100%")
-    text_controls = bottom_font.get_rect(CONTROL_TEXT)
-
-    grid_width = maze.cols * CELL_SIZE + 2 * MARGIN
-
-    width = max(grid_width, text_controls.width + 2 * MARGIN)
-
-    maze_offset_x = (width - (maze.cols * CELL_SIZE)) // 2
-    
     loop_x = width - MARGIN - text_loop.width
     text_y = (TOP_BAR - text_loop.height) / 2
 
-    maze_bottom_y = TOP_BAR + ROWS * CELL_SIZE + MARGIN
+    maze_bottom_y = TOP_BAR + grid_pixel_height + MARGIN
     stats_bar_y = maze_bottom_y
     bottom_bar_y = stats_bar_y + STATS_BAR
     height = bottom_bar_y + BOTTOM_BAR
-    surface = pygame.display.set_mode((width, height))
 
-    stats_text_y = stats_bar_y + (STATS_BAR - bottom_font.get_rect("A").height) / 2
-    bottom_text_y = bottom_bar_y + (BOTTOM_BAR - text_controls.height) / 2
-    bottom_text_x = (width - text_controls.width) / 2
+    surface = pygame.display.set_mode((width, height))
+    bottom_text_y = bottom_bar_y + (BOTTOM_BAR - bottom_font.get_rect(CONTROL_TEXT).height) / 2
+    bottom_text_x = (width - bottom_font.get_rect(CONTROL_TEXT).width) / 2
+
+    renderer_left = Renderer(surface, CELL_SIZE, left_offset_x, TOP_BAR)
+    renderer_mid = Renderer(surface, CELL_SIZE, mid_offset_x, TOP_BAR)
+    renderer_right = Renderer(surface, CELL_SIZE, right_offset_x, TOP_BAR)
 
     clock = pygame.time.Clock()
     pygame.key.set_repeat(300, 80)
+
     running = True
     rebuild = False
     paused = False
 
-    view_mode = "TRUE"
-
     frames, ticks = 0, 0
     changed_walls = []
     flash_countdown = 0
+
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -113,16 +129,17 @@ def main():
                     rebuild = True
                 if event.key == pygame.K_SPACE:
                     paused = not paused
-                if event.key == pygame.K_v:
-                    view_mode = "BELIEF" if view_mode == "TRUE" else "TRUE"
 
         if rebuild:
             maze = build_maze(ROWS, COLS, seed, loop_fraction)
             shift_rng = make_shift_rng(seed)
-            robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
-            initial_changes = robot.sense(maze)
-            astar = AStar(robot.belief_map, maze.exit_cell)
+            astar_robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
+            dstar_robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
+            initial_changes = astar_robot.sense(maze)
+            astar = AStar(astar_robot.belief_map, maze.exit_cell)
             astar.update(initial_changes)
+            dstar_lite = DStarLite(dstar_robot.belief_map, maze.exit_cell)
+            dstar_lite.update(initial_changes, dstar_robot.current_cell)
             frames = 0
             ticks = 0
             changed_walls = []
@@ -131,6 +148,8 @@ def main():
 
         if not paused:
             frames += 1
+            tick_this_frame = False
+
             if flash_countdown > 0:
                 flash_countdown -= 1
 
@@ -141,22 +160,34 @@ def main():
                     changed_walls = shift_walls(maze, shift_rng, SHIFT_COUNT)
                     flash_countdown = FLASH_FRAMES
 
-                    sensory_changes = robot.sense(maze)
-                    astar.update(sensory_changes)
-
-                if not robot.at_exit():
+                if not astar_robot.at_exit():
+                    astar_changes = astar_robot.sense(maze)
+                    astar.update(astar_changes)
                     try:
-                        target_direction = astar.next_move(robot.current_cell, SENSOR_RANGE)
-                        robot.move(maze, target_direction)
+                        target_direction = astar.next_move(astar_robot.current_cell, SENSOR_RANGE)
+                        astar_robot.move(maze, target_direction)
 
-                        step_changes = robot.sense(maze)
+                        step_changes = astar_robot.sense(maze)
                         astar.update(step_changes)
+                    except (ValueError, IndexError) as e:
+                        pass
+
+                
+                if not dstar_robot.at_exit():
+                    dstar_changes = dstar_robot.sense(maze)
+                    dstar_lite.update(dstar_changes, dstar_robot.current_cell)
+                    try:
+                        target_direction = dstar_lite.next_move(dstar_robot.current_cell, SENSOR_RANGE)
+                        dstar_robot.move(maze, target_direction)
+
+                        step_changes = dstar_robot.sense(maze)
+                        dstar_lite.update(step_changes, dstar_robot.current_cell)
                     except (ValueError, IndexError) as e:
                         pass
 
         surface.fill(BLACK)
 
-        top_font.render_to(surface, (MARGIN, text_y), f"Seed: {seed}    ({view_mode} VIEW)", WHITE)
+        top_font.render_to(surface, (MARGIN, text_y), f"Seed: {seed}", WHITE)
         top_font.render_to(surface, (loop_x, text_y), f"Loops: {round(loop_fraction * 100)}%", WHITE)
 
         if paused:
@@ -164,51 +195,80 @@ def main():
         else:
             bottom_font.render_to(surface, (bottom_text_x, bottom_text_y), CONTROL_TEXT, WHITE)
 
-        if view_mode == "TRUE":
-            draw_maze(surface, maze, CELL_SIZE, maze_offset_x, TOP_BAR)
+        # Draw A* belief maze
+        surface.fill(GRAY_DIM, rect=(left_offset_x, TOP_BAR, grid_pixel_width, grid_pixel_height))
+        for r in range(ROWS):
+            for c in range(COLS):
+                renderer_left.draw_cell((r, c), BLACK, inset=1)
 
-            if flash_countdown > 0:
-                for (r, c, d) in changed_walls:
-                    if not maze.is_open(r, c, d):
-                        draw_wall(surface, r, c, d, CELL_SIZE, maze_offset_x, TOP_BAR, YELLOW)
-        else:
-            maze_pixel_width = COLS * CELL_SIZE
-            maze_pixel_height = ROWS * CELL_SIZE
-            surface.fill(
-                GRAY_DIM, 
-                rect=(maze_offset_x, TOP_BAR, maze_pixel_width, maze_pixel_height)
-            )
+        renderer_left.draw_belief_maze(astar_robot)
 
-            for r in range(ROWS):
-                for c in range(COLS):
-                    draw_cell(surface, (r, c), BLACK, CELL_SIZE, maze_offset_x, TOP_BAR, inset=1)
+        renderer_left.draw_cell(maze.start_cell, GREEN, INSET)
+        renderer_left.draw_cell(maze.exit_cell, RED, INSET)
 
-            draw_belief_maze(surface, robot, CELL_SIZE, maze_offset_x, TOP_BAR)
+        planned_path_astar = getattr(astar, 'current_path', None)
+        if planned_path_astar and len(planned_path_astar) >= 2:
+            path_points = [renderer_left.cell_center(cell) for cell in planned_path_astar]
+            pygame.draw.lines(surface, CYAN, False, path_points, width=4)
 
-        draw_cell(surface, maze.start_cell, GREEN, CELL_SIZE, maze_offset_x, TOP_BAR, INSET)
-        draw_cell(surface, maze.exit_cell, RED, CELL_SIZE, maze_offset_x, TOP_BAR, INSET)
+        renderer_left.draw_robot(astar_robot.current_cell, BLUE)
 
-        if view_mode == "BELIEF":
-            planned_path = getattr(astar, 'current_path', None)
-            if planned_path and len(planned_path) >= 2:
-                path_points = [
-                    cell_center(cell, CELL_SIZE, maze_offset_x, TOP_BAR)
-                    for cell in planned_path
-                ]
-                pygame.draw.lines(surface, CYAN, False, path_points, width=4)
+        # Draw true maze
+        renderer_mid.draw_maze(maze)
+        if flash_countdown > 0:
+            for (r, c, d) in changed_walls:
+                if not maze.is_open(r, c, d):
+                    renderer_mid.draw_wall(r, c, d, YELLOW)
 
-        draw_robot(surface, robot.current_cell, BLUE, CELL_SIZE, maze_offset_x, TOP_BAR)
+        renderer_mid.draw_cell(maze.start_cell, GREEN, INSET)
+        renderer_mid.draw_cell(maze.exit_cell, RED, INSET)
 
-        stats_string = (
-            f"Replans: {astar.stats["replans"]} ({astar.stats["same_path_replans"]} same)    "
-            f"Nodes: {astar.stats["nodes_expanded"]}    "
-            f"Planning Time: {(astar.stats["total_planning_time"] * 1000):.2f} ms"
-        )
+        renderer_mid.draw_robot(astar_robot.current_cell, BLUE)
+        renderer_mid.draw_robot(dstar_robot.current_cell, MAGENTA)
+        
+        # Draw D* Lite belief maze
+        surface.fill(GRAY_DIM, rect=(right_offset_x, TOP_BAR, grid_pixel_width, grid_pixel_height))
+        for r in range(ROWS):
+            for c in range(COLS):
+                renderer_right.draw_cell((r, c), BLACK, inset=1)
 
-        stats_rect = bottom_font.get_rect(stats_string)
-        stats_text_x = (width - stats_rect.width) // 2
-        bottom_font.render_to(surface, (stats_text_x, stats_text_y), stats_string, WHITE)
+        renderer_right.draw_belief_maze(dstar_robot)
 
+        renderer_right.draw_cell(maze.start_cell, GREEN, INSET)
+        renderer_right.draw_cell(maze.exit_cell, RED, INSET)
+
+        planned_path_dstar = getattr(dstar_lite, 'current_path', None)
+        if planned_path_dstar and len(planned_path_dstar) >= 2:
+            path_points = [renderer_right.cell_center(cell) for cell in planned_path_dstar]
+            pygame.draw.lines(surface, YELLOW, False, path_points, width=4)
+
+        renderer_right.draw_robot(dstar_robot.current_cell, MAGENTA)
+
+        # Left Layout
+        bottom_font.render_to(surface, (left_offset_x, stats_bar_y + 2), "A* BELIEF MAP", CYAN)
+        astar_line1 = f"Replans: {astar.stats['replans']} ({astar.stats['same_path_replans']} same)"
+        astar_line2 = f"Nodes: {astar.stats['nodes_expanded']}"
+        astar_line3 = f"Planning Time: {(astar.stats['total_planning_time'] * 1000):.2f} ms"
+        bottom_font.render_to(surface, (left_offset_x, stats_bar_y + 2 + LINE_HEIGHT), astar_line1, WHITE)
+        bottom_font.render_to(surface, (left_offset_x, stats_bar_y + 2 + LINE_HEIGHT * 2), astar_line2, WHITE)
+        bottom_font.render_to(surface, (left_offset_x, stats_bar_y + 2 + LINE_HEIGHT * 3), astar_line3, WHITE)
+        
+        # Middle Layout
+        mid_label = "TRUE MAZE"
+        mid_rect = bottom_font.get_rect(mid_label)
+        bottom_font.render_to(surface, (mid_offset_x + (grid_pixel_width - mid_rect.width) // 2, stats_bar_y + 2), mid_label, WHITE)
+        
+        # Right Layout
+        dstar_title = "D* LITE BELIEF MAP"
+        dstar_rect = bottom_font.get_rect(dstar_title)
+        bottom_font.render_to(surface, (right_offset_x + grid_pixel_width - dstar_rect.width, stats_bar_y + 2), dstar_title, YELLOW)
+        dstar_line1 = f"Replans: {dstar_lite.stats['replans']} ({dstar_lite.stats['same_path_replans']} same)"
+        dstar_line2 = f"Nodes: {dstar_lite.stats['nodes_expanded']}"
+        dstar_line3 = f"Planning Time: {(dstar_lite.stats['total_planning_time'] * 1000):.2f} ms"
+        bottom_font.render_to(surface, (right_offset_x + grid_pixel_width - bottom_font.get_rect(dstar_line1).width, stats_bar_y + 2 + LINE_HEIGHT), dstar_line1, WHITE)
+        bottom_font.render_to(surface, (right_offset_x + grid_pixel_width - bottom_font.get_rect(dstar_line2).width, stats_bar_y + 2 + LINE_HEIGHT * 2), dstar_line2, WHITE)
+        bottom_font.render_to(surface, (right_offset_x + grid_pixel_width - bottom_font.get_rect(dstar_line3).width, stats_bar_y + 2 + LINE_HEIGHT * 3), dstar_line3, WHITE)
+        
         pygame.display.flip()
         clock.tick(60)
 
