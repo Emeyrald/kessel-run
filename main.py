@@ -1,3 +1,5 @@
+import argparse
+import imageio
 import pygame
 import pygame.freetype
 import random
@@ -14,7 +16,6 @@ COLS = 50
 
 TARGET_GRID_WIDTH = 400
 TARGET_GRID_HEIGHT = 400
-CELL_SIZE = min(TARGET_GRID_WIDTH // COLS, TARGET_GRID_HEIGHT // ROWS)
 
 MARGIN = 20
 TOP_BAR = 40
@@ -48,6 +49,11 @@ SHIFT_COUNT = 8
 FLASH_FRAMES = 30
 SENSOR_RANGE = 5
 
+RECORD_FPS = 10 # One GIF frame per tick, played a little faster than live
+RECORD_SCALE = 0.6 # Keeps the GIF under GitHub's README width
+RECORD_MAX_FRAMES = 600
+RECORD_HOLD_FRAMES = 15 # Hold the finish for 1.5 seconds before looping
+
 KEY_TO_DIRECTION = {
     pygame.K_UP: Direction.NORTH,
     pygame.K_DOWN: Direction.SOUTH,
@@ -55,13 +61,25 @@ KEY_TO_DIRECTION = {
     pygame.K_RIGHT: Direction.EAST,
 }
 
-def main():
+def capture_frame(surface):
+    width, height = surface.get_size()
+    scaled = pygame.transform.smoothscale(surface, (int(width * RECORD_SCALE), int(height * RECORD_SCALE)))
+    return pygame.surfarray.array3d(scaled).swapaxes(0, 1)
+
+def save_gif(path, frames):
+    frames = frames + [frames[-1]] * RECORD_HOLD_FRAMES
+    imageio.mimsave(path, frames, duration=1000 / RECORD_FPS, loop=0)
+    print(f"Saved {len(frames)} frames to {path}")
+
+def main(rows=ROWS, cols=COLS, seed=None, record_path=None):
     pygame.init()
 
-    seed = random.randint(1, 1000000)
+    if seed is None:
+        seed = random.randint(1, 1000000)
     loop_fraction = LOOP_FRACTION
+    cell_size = min(TARGET_GRID_WIDTH // cols, TARGET_GRID_HEIGHT // rows)
 
-    maze = build_maze(ROWS, COLS, seed, loop_fraction)
+    maze = build_maze(rows, cols, seed, loop_fraction)
     shift_rng = make_shift_rng(seed)
 
     astar_robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
@@ -77,8 +95,8 @@ def main():
     top_font = pygame.freetype.SysFont("Arial", TOP_FONT_SIZE)
     bottom_font = pygame.freetype.SysFont("Arial", BOTTOM_FONT_SIZE)
 
-    grid_pixel_width = COLS * CELL_SIZE
-    grid_pixel_height = ROWS * CELL_SIZE
+    grid_pixel_width = cols * cell_size
+    grid_pixel_height = rows * cell_size
 
     left_offset_x = MARGIN
     mid_offset_x = left_offset_x + grid_pixel_width + MARGIN
@@ -98,9 +116,9 @@ def main():
     bottom_text_y = bottom_bar_y + (BOTTOM_BAR - bottom_font.get_rect(CONTROL_TEXT).height) / 2
     bottom_text_x = (width - bottom_font.get_rect(CONTROL_TEXT).width) / 2
 
-    renderer_left = Renderer(surface, CELL_SIZE, left_offset_x, TOP_BAR)
-    renderer_mid = Renderer(surface, CELL_SIZE, mid_offset_x, TOP_BAR)
-    renderer_right = Renderer(surface, CELL_SIZE, right_offset_x, TOP_BAR)
+    renderer_left = Renderer(surface, cell_size, left_offset_x, TOP_BAR)
+    renderer_mid = Renderer(surface, cell_size, mid_offset_x, TOP_BAR)
+    renderer_right = Renderer(surface, cell_size, right_offset_x, TOP_BAR)
 
     clock = pygame.time.Clock()
     pygame.key.set_repeat(300, 80)
@@ -112,8 +130,11 @@ def main():
     frames, ticks = 0, 0
     changed_walls = []
     flash_countdown = 0
+    recorded_frames = []
 
     while running:
+        tick_this_frame = False
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -131,7 +152,7 @@ def main():
                     paused = not paused
 
         if rebuild:
-            maze = build_maze(ROWS, COLS, seed, loop_fraction)
+            maze = build_maze(rows, cols, seed, loop_fraction)
             shift_rng = make_shift_rng(seed)
             astar_robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
             dstar_robot = Robot(maze.rows, maze.cols, maze.start_cell, maze.exit_cell, SENSOR_RANGE)
@@ -148,13 +169,13 @@ def main():
 
         if not paused:
             frames += 1
-            tick_this_frame = False
 
             if flash_countdown > 0:
                 flash_countdown -= 1
 
             if frames % FRAMES_PER_TICK == 0:
                 ticks += 1
+                tick_this_frame = True
 
                 if ticks % SHIFT_EVERY == 0:
                     changed_walls = shift_walls(maze, shift_rng, SHIFT_COUNT)
@@ -197,8 +218,8 @@ def main():
 
         # Draw A* belief maze
         surface.fill(GRAY_DIM, rect=(left_offset_x, TOP_BAR, grid_pixel_width, grid_pixel_height))
-        for r in range(ROWS):
-            for c in range(COLS):
+        for r in range(rows):
+            for c in range(cols):
                 renderer_left.draw_cell((r, c), BLACK, inset=1)
 
         renderer_left.draw_belief_maze(astar_robot)
@@ -228,8 +249,8 @@ def main():
         
         # Draw D* Lite belief maze
         surface.fill(GRAY_DIM, rect=(right_offset_x, TOP_BAR, grid_pixel_width, grid_pixel_height))
-        for r in range(ROWS):
-            for c in range(COLS):
+        for r in range(rows):
+            for c in range(cols):
                 renderer_right.draw_cell((r, c), BLACK, inset=1)
 
         renderer_right.draw_belief_maze(dstar_robot)
@@ -268,11 +289,25 @@ def main():
         bottom_font.render_to(surface, (right_offset_x + grid_pixel_width - bottom_font.get_rect(dstar_line1).width, stats_bar_y + 2 + LINE_HEIGHT), dstar_line1, WHITE)
         bottom_font.render_to(surface, (right_offset_x + grid_pixel_width - bottom_font.get_rect(dstar_line2).width, stats_bar_y + 2 + LINE_HEIGHT * 2), dstar_line2, WHITE)
         bottom_font.render_to(surface, (right_offset_x + grid_pixel_width - bottom_font.get_rect(dstar_line3).width, stats_bar_y + 2 + LINE_HEIGHT * 3), dstar_line3, WHITE)
-        
+
+        if record_path and tick_this_frame:
+            recorded_frames.append(capture_frame(surface))
+            race_over = astar_robot.at_exit() and dstar_robot.at_exit()
+            if race_over or len(recorded_frames) >= RECORD_MAX_FRAMES:
+                running = False
+
         pygame.display.flip()
         clock.tick(60)
+
+    if record_path and recorded_frames:
+        save_gif(record_path, recorded_frames)
 
     pygame.quit()
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Watch A* and D* Lite race through a shifting maze.")
+    parser.add_argument("--size", type=int, default=ROWS, help=f"maze is SIZE x SIZE (default {ROWS})")
+    parser.add_argument("--seed", type=int, help="maze seed (default: random)")
+    parser.add_argument("--record", metavar="PATH", help="save the race as a GIF, then quit once both robots finish")
+    args = parser.parse_args()
+    main(args.size, args.size, args.seed, args.record)
