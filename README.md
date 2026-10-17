@@ -25,7 +25,7 @@ Even with no loops, where it expands a third as many nodes, it is still ~3× slo
 ![Nodes expanded vs. loop fraction](results/sweep_loop_fraction_nodes_expanded.png)
 
 - **Loops decide the winner:** with no loops, D* Lite expands 67% fewer nodes; at 40% loops, A* expands 15% fewer
-- **D* Lite's lead grows with maze size:** 26% fewer nodes at 25×25, 45% fewer at 100×100
+- **D\* Lite's lead grows with maze size:** 26% fewer nodes at 25×25, 45% fewer at 100×100
 - **Shift size barely matters:** D* Lite stays 32–38% ahead from 1 to 32 walls per shift
 
 
